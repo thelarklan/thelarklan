@@ -65,6 +65,20 @@ only on:
 - a **direct reply on an unresolved thread the agent itself opened**, or
 - an **explicit mention or review command** naming the agent.
 
+*Unresolved* is not available from REST. `/pulls/{n}/comments` returns the
+comments but no resolution state, so an implementation reading only that
+endpoint cannot evaluate the first trigger and will silently fall back to
+treating every thread as open — the runaway this scoping exists to prevent.
+Resolution comes from GraphQL:
+
+```
+repository.pullRequest.reviewThreads { isResolved, isOutdated, comments }
+```
+
+or from tracking the timeline's thread-resolution events. Collection needs
+both APIs: REST for the comment bodies and IDs, GraphQL for which threads
+are still open.
+
 Everything else is noise for this purpose. Note what is *not* excluded:
 pull requests authored by the other agents. Skipping bot-authored PRs
 wholesale would switch off exactly the cross-agent review this arrangement
@@ -224,6 +238,13 @@ Around that key:
   <!-- agent-review: reviewer=larkbot-claude head=<sha> contract=<version> trigger=<id> -->
   ```
 
+  `trigger` carries the immutable ID of the triggering event for signals 2
+  and 3. Signal 1 has no such event — the head SHA *is* the trigger, and it
+  is already in the marker — so it uses the literal `trigger=head`. Fixing
+  that value rather than leaving it absent keeps marker parsing uniform
+  across the three implementations, which is the whole point of writing the
+  marker down.
+
   Query for it before starting work. A matching marker means done; skip.
 - **Revalidate the head SHA immediately before submitting.** If the PR has
   moved on since collection, the review is about code that no longer
@@ -350,18 +371,29 @@ One validated schema, agreed before any model is asked for output:
   verdict: "approve" | "request_changes" | "comment",
   findings: [{
     severity: "blocker" | "warning" | "suggestion" | "nit",
-    path, line, side,
+    path?, line?, side?,   // omitted or null for a PR-level finding
     title, body,
-    suggestion?,     // optional concrete patch
+    suggestion?,           // optional concrete patch
     evidence
   }]
 }
 ```
 
-Every location is validated against the exact diff at `expected_head_sha`
-before submission. If validation fails, **no review is posted** — a partial
-review with half its findings dropped is worse than an error, because it
-looks complete.
+The location fields are **optional**. Some of the most valuable findings
+have no line to attach to — a missing linked issue or spec, an
+architectural objection to the shape of the change, a repository-wide
+convention broken across the diff. Requiring `path` and `line` on every
+finding would make those fail diff-location validation, and the practical
+effect is not stricter review but a model that learns to pin PR-level
+concerns to an arbitrary nearby line, or to drop them.
+
+So submission splits by location: findings with one are validated against
+the exact diff at `expected_head_sha` and posted inline; findings without
+one are rendered into the top-level review body alongside the summary.
+
+If validation of a located finding fails, **no review is posted at all** —
+a partial review with half its findings dropped is worse than an error,
+because it looks complete.
 
 ### Submission
 
@@ -375,12 +407,22 @@ carrying the summary and the inline findings, not a scatter of comments.
 agent does not approve or merge its own pull request, and blocking threads
 are left for the reviewer who opened them to resolve.
 
+**Drafts cannot be approved.** `APPROVE` and `REQUEST_CHANGES` on a draft
+PR are rejected with HTTP 422 (*Pull request is a draft and cannot be
+approved or have changes requested*). A draft can still reach review —
+signal 3's explicit-mention trigger, or a manual dispatch — so the
+submission layer downgrades the event to `COMMENT` on a draft rather than
+letting the call fail. The findings are unchanged; only the event type is.
+Checking `draft` at submission time, not at collection time, since the
+author may have marked it ready in between.
+
 ### Behavioural fixtures
 
 The contract is only real if it is tested against the ways it fails. At
 minimum: wrong authenticated identity; a head SHA that moved mid-review;
 draft and self-authored PRs; a missing spec or linked issue; pagination
 past 100 for each paginated source; an inline reply on an existing thread;
+a finding with no `path`/`line`; an approval attempted on a draft;
 an API failure mid-run; and a clean PR with no findings at all — the case
 where a contract most easily invents something to say.
 
@@ -405,7 +447,8 @@ was. All of it should be closed before the script is installed:
 - It sets `per_page=100` but does not follow `Link` pages, so it neither
   paginates to completion nor fails when a further page exists.
 - It reads only conversation comments, missing replies on inline review
-  threads — the highest-value case for signal 3.
+  threads — the highest-value case for signal 3 — and makes no GraphQL
+  call, so it cannot see which threads are unresolved.
 - Signal 3 is unscoped and uncapped: any comment by another account fires
   it, with no round limit.
 - There is no fail-closed identity preflight, and no durable idempotency
