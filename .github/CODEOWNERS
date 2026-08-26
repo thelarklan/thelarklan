@@ -4,7 +4,9 @@
 # changed paths.
 #
 # Rules that matter:
-#   * This file only takes effect on the repository's DEFAULT branch (main).
+#   * The file that applies to a pull request is the one on that PR's BASE
+#     branch -- not necessarily the default branch. Different branches can
+#     carry different ownership.
 #   * Later matching patterns win over earlier ones (last match wins).
 #   * An owner must have write access to the repo, or the entry is ignored
 #     silently -- no error, no review request.

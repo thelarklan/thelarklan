@@ -12,12 +12,19 @@ request.
 
 ## The participants
 
-| Account           | Access | Part it plays                                   |
-| ----------------- | ------ | ----------------------------------------------- |
-| `@thelarklan`     | Admin  | Human owner. Sole owner of the guardrail paths. |
-| `@larkbot-codex`  | Write  | Agent. Opens PRs, reviews the others'.          |
-| `@larkbot-gemini` | Write  | Agent. Opens PRs, reviews the others'.          |
-| `@larkbot-claude` | Write  | Agent. Opens PRs, reviews the others'.          |
+| Account           | Intended access | Part it plays                                   |
+| ----------------- | --------------- | ----------------------------------------------- |
+| `@thelarklan`     | Admin           | Human owner. Sole owner of the guardrail paths. |
+| `@larkbot-codex`  | Write           | Agent. Opens PRs, reviews the others'.          |
+| `@larkbot-gemini` | Write           | Agent. Opens PRs, reviews the others'.          |
+| `@larkbot-claude` | Write           | Agent. Opens PRs, reviews the others'.          |
+
+The Access column is the **intended** configuration, not a claim about what
+is currently granted; *Current state* below records what was actually read
+from the API, and it is the section to trust. The distinction matters
+because an entry for an account that does not yet hold write access is
+discarded in silence, so intent and reality are indistinguishable from the
+outside.
 
 The agents hold **Write**, deliberately not Admin. Admin would let an agent
 edit the ruleset described below and remove its own constraints.
@@ -45,8 +52,13 @@ assignment step — the author excludes themselves by writing the PR.
 
 Two conditions have to hold or this silently does nothing:
 
-- CODEOWNERS is read **only from the default branch**. If the default
-  branch is not the branch carrying this file, no review is ever requested.
+- The CODEOWNERS that applies to a pull request is the one on **that PR's
+  base branch**, not the repository default branch. Branches may carry
+  different ownership files, and that is supported. A PR based on a branch
+  with no CODEOWNERS gets no code-owner review request — so a
+  non-default-base PR routing "wrongly" is usually correct behaviour, not a
+  fault to chase. For a fork PR the file still comes from the base
+  repository's base branch; the fork's copy is never consulted.
 - An owner must have **write access**. An entry naming an account without
   it is ignored with no error and no warning — a pending collaborator
   invitation looks identical to a working setup until you notice reviews
@@ -105,17 +117,22 @@ not all in place, and the gaps are the silent kind:
 - **The ruleset does not exist.** `main` is unprotected and the repository
   has no rulesets. Nothing currently requires a pull request, an approval,
   or a code-owner review to land on the default branch.
-- **Agent write access is unconfirmed.** `@larkbot-claude` has read-only
-  access to this repository, which means its CODEOWNERS entry is inert. The
-  access held by `@larkbot-codex` and `@larkbot-gemini` cannot be read
-  without push access and has not been verified here.
+- **Agent write access is now in place.** Read from the collaborators API
+  on 2026-08-26: `@larkbot-codex`, `@larkbot-gemini` and `@larkbot-claude`
+  all hold **Write**, and `@thelarklan` holds Admin. This changed during
+  the life of this pull request — all three held Read earlier the same day
+  — so re-read it rather than trusting this line indefinitely.
+- **Auto-merge is disabled at the repository level.**
+  `allow_auto_merge` is `false`. Enabling it is one step; opting an
+  individual PR into auto-merge is a second, separate one. Neither is done,
+  so nothing merges unattended today — which is the safe side of the gap
+  while the ruleset is still missing.
 - **The previous CODEOWNERS named accounts that do not exist.**
   `@thelarkbot` and `@thelarkdoodle` both 404. Every review request routed
   through them went nowhere, with no error anywhere to notice.
 
-Until write access is confirmed for all three agents and the ruleset is
-created, treat review as manual. The pull-based check described in
-[`review-checking.md`](review-checking.md) is what makes that survivable:
+Until the ruleset is created, treat review as manual. The pull-based check
+described in [`review-checking.md`](review-checking.md) is what makes that survivable:
 it looks at reviews and commits directly, so it keeps working while review
 requests are still being discarded.
 
@@ -145,10 +162,12 @@ they should stay rare enough to be worth reading.
 **Write access without the ruleset is worse than no setup.** Collaborators
 should be added only once the ruleset is active. In the window between the
 two, an agent can push straight to the default branch and skip review
-entirely. This repository is in that window now: see *Current state*.
+entirely. This repository is squarely in that window now — three agents
+hold write access and `main` is unprotected — and creating the ruleset is
+the single highest-value thing left to do. See *Current state*.
 
 **A silently ignored owner and a quiet week look identical.** Whether the
-cause is a missing account, missing write access, or CODEOWNERS sitting on
-the wrong branch, the symptom is the same — no review requests arrive, and
+cause is a missing account, missing write access, or no CODEOWNERS on the
+pull request's base branch, the symptom is the same — no review requests arrive, and
 nothing reports an error. Nobody notices an absence. This is the specific
 failure the checking protocol is built to survive.

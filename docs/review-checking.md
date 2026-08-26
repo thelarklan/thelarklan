@@ -5,8 +5,9 @@ request. This document covers the other half: how an agent finds out that
 it has been asked, and what it does about it.
 
 The two are deliberately independent. Review requests can be discarded
-silently — a missing account, an owner without write access, CODEOWNERS on
-the wrong branch — and a discarded request produces no error anywhere. An
+silently — a missing account, an owner without write access, no CODEOWNERS
+on the PR's base branch — and a discarded request produces no error
+anywhere. An
 agent that waits to be told will wait forever without ever learning that
 something is wrong. So the agents **poll**, and they poll against commits
 and reviews rather than against notifications, because those are the facts
@@ -39,14 +40,47 @@ event with a timestamp later than the agent's last review. The code did not
 change; its status did. This is the normal path in these repositories,
 where PRs open as drafts and are marked ready only once checks pass.
 
-**3 — Someone replied after the review.** A comment by any account other
-than the agent, created after the agent's last review. A review that drew a
-response is unfinished work.
+**3 — Someone replied to this review.** A review that drew a response is
+unfinished work — but this signal has to be scoped narrowly, because it is
+the one that can run away.
+
+*Comment* means both of GitHub's kinds, and a check that reads only one of
+them is broken:
+
+- **Conversation comments** on the PR, from the issue-comments API
+  (`/issues/{n}/comments`).
+- **Inline review-thread comments**, from the pull-request review-comments
+  API (`/pulls/{n}/comments`).
+
+A reply to an inline blocking finding — the single most important thing to
+notice — appears only in the second. Both need complete pagination, and
+both need the reviewer's own comments excluded.
+
+Not every comment counts. "Any comment by another account" sweeps in the
+other agents' review summaries and any automation that posts, and since
+each of those is itself a comment by another account, three agents can wake
+each other indefinitely without a line of code changing. The signal fires
+only on:
+
+- a **direct reply on an unresolved thread the agent itself opened**, or
+- an **explicit mention or review command** naming the agent.
+
+Everything else is noise for this purpose. Note what is *not* excluded:
+pull requests authored by the other agents. Skipping bot-authored PRs
+wholesale would switch off exactly the cross-agent review this arrangement
+exists to produce; the narrow trigger above is what makes them safe to
+watch.
+
+Autonomous follow-up rounds are **capped** — two per reviewer per PR. Past
+that the agent stops and escalates to `@thelarklan` rather than replying
+again. Two agents disagreeing politely forever is a plausible failure mode,
+and it is expensive in a way nobody notices until the bill arrives.
 
 Signals 2 and 3 do not move the head SHA, so they have nothing to key
-against. Each is recorded in a state file the first time it fires, keyed by
-PR, reason, and the timestamp of the triggering event. Without that they
-would report on every poll for as long as the PR stays open.
+against on their own. Each is recorded the first time it fires, keyed by PR
+and by the **immutable ID of the triggering event** — the comment ID or
+thread ID, not its timestamp, which is mutable on edit and collides across
+sources. See *Idempotency* below for the durable form of that key.
 
 ## What does not count
 
@@ -68,8 +102,14 @@ on it — and then signal 2 surfaces it *again* when it actually becomes
 ready. Signal 2 is the correct trigger for a draft; signal 1 should skip
 drafts entirely.
 
-**The agent's own comments.** Signal 3 has to exclude the reviewer, or the
-agent's own follow-up comment on its own review re-triggers the same PR.
+**The agent's own comments.** Signal 3 has to exclude the reviewer across
+both comment sources, or the agent's own follow-up on its own thread
+re-triggers the same PR immediately.
+
+**A PR authored by another agent.** This one is deliberately *not*
+excluded, and the temptation to add a blanket bot-author filter should be
+resisted — it reads like noise reduction and is actually the removal of
+peer review. Only the agent's own PRs are filtered, on the reviewer login.
 
 ## The silence invariant
 
@@ -97,14 +137,29 @@ report "nothing to do".
 
 ## Details that decide correctness
 
-**Pagination hides the newest item, not the oldest.** Reviews and timeline
-events must be fetched with `per_page=100`; the default of 30 drops the
-most recent review on a PR that has been through several rounds, which
-silently resets signal 1. Comments should use the API's `since` filter so
-the server does the narrowing and the newest comment cannot hide behind a
-first page. The PR search has a result ceiling too — whatever limit is set,
-exceeding it truncates without complaint, so the limit needs to stay
-comfortably above the number of open PRs across the account.
+**Pagination hides the newest item, not the oldest.** These endpoints
+return oldest-first, so a truncated read drops the *most recent* review —
+which silently resets signal 1 and makes an already-reviewed PR look
+untouched, or hides the reply that should have re-armed signal 3.
+
+`per_page=100` moves the truncation threshold; it does not remove it. 100
+is the maximum page size GitHub allows, so a PR with more than 100 reviews
+still hides its newest one behind page 2. There are two acceptable
+behaviours and no third:
+
+- **Follow every page** to the end, via the `Link` header's `rel="next"`,
+  for reviews, timeline events, and both comment sources; or
+- **fail explicitly** when another page exists.
+
+Silently reading page 1 and proceeding is a violation of the silence
+invariant, not an optimisation. The API's `since` filter may narrow a
+comment read, but it is a cost reduction layered on top of full
+pagination — never a substitute for it.
+
+The PR search has a result ceiling too: whatever limit is set, exceeding it
+truncates without complaint, so the limit needs to stay comfortably above
+the number of open PRs across the account, and the check should fail if the
+result count reaches it.
 
 **Timestamps are compared as strings.** ISO-8601 UTC sorts chronologically
 under `LC_ALL=C` and not necessarily under any other collation. Set it
@@ -120,6 +175,17 @@ Each agent runs the same check under its own identity — `larkbot-codex`,
 `larkbot-gemini`, or `larkbot-claude` — as the reviewer login that signals
 1 through 3 are all evaluated against.
 
+**Identity is a fail-closed preflight, not a deployment assumption.**
+Before any polling and again before any submission, resolve the
+authenticated login (`gh api user --jq .login`) and require it to equal the
+configured `reviewer_login`. Abort otherwise. A runner that has quietly
+picked up the human's or an admin's credentials would evaluate signals
+against the wrong review history — reporting nothing, since that identity
+has no reviews to be stale against — and worse, could post a review or an
+approval under the guardrail identity. `@thelarklan` is the only account
+that can approve a guardrail PR; an agent acting as it defeats the whole
+arrangement. The failure must be loud and must stop the run.
+
 Nothing else is shared. Each agent authenticates as itself, and each keeps
 its own state file: a shared one would let one agent's marker suppress
 another agent's report of the same PR, which is the one collision that
@@ -128,6 +194,68 @@ loses work rather than duplicating it.
 The state file is a cache, not a record. Deleting it re-reports any open
 PR currently matching signal 2 or 3, once — inconvenient, never wrong. It
 does not need backing up.
+
+## Idempotency
+
+The local state file is a fast path. It is not sufficient on its own: an
+Action, a scheduled cloud run, or a crashed-and-restarted worker has no
+access to it, and would happily post a second copy of a review that already
+exists. Correctness has to survive a stateless runner.
+
+Make the unit of work an explicit key:
+
+```
+(repository, pr_number, expected_head_sha, reviewer_login,
+ review_contract_version, trigger_event_id?)
+```
+
+`review_contract_version` is in the key on purpose: a genuine change to the
+review contract should re-review PRs that were assessed under the old one,
+and nothing else should.
+
+Around that key:
+
+- **Single-flight claim.** One holder at a time, so a poll and an event
+  delivery racing on the same PR produce one review.
+- **A marker in the review body**, so GitHub itself is the durable record
+  the local cache is only caching:
+
+  ```
+  <!-- agent-review: reviewer=larkbot-claude head=<sha> contract=<version> trigger=<id> -->
+  ```
+
+  Query for it before starting work. A matching marker means done; skip.
+- **Revalidate the head SHA immediately before submitting.** If the PR has
+  moved on since collection, the review is about code that no longer
+  exists — discard it and re-enter with the new head rather than attaching
+  stale findings to a fresh commit.
+
+State stays per-reviewer at every layer, cache and marker alike. A shared
+key would let one agent's completion suppress another's review of the same
+PR — the one collision that loses work rather than duplicating it.
+
+## Events are the fast path; polling is reconciliation
+
+The poll is the safety net, and it is the part that must never be removed:
+it is what survives review requests being discarded silently, which is the
+failure this whole document exists for. But it is not the only way work
+should arrive.
+
+Where a host can receive them, the events worth listening for are `opened`,
+`reopened`, `synchronize`, `ready_for_review`, `review_requested`, and
+explicit review commands. They deliver in seconds instead of at the next
+poll boundary.
+
+Both paths must emit the **same normalized work item**:
+
+```
+{ repo, pr, expected_head_sha, reviewer_login, trigger, trigger_event_id }
+```
+
+and both must pass through the same idempotency layer above. If each
+platform builds its own path from event to review, the three agents will
+quietly develop three different review behaviours, and comparing their
+output stops meaning anything.
 
 ## Cadence
 
@@ -144,28 +272,144 @@ outcome — the merge gate asks for two approvals.
 
 ## What happens after a PR surfaces
 
-Surfacing a PR is where this check ends. What to do with it is the target
-repository's business: follow its `AGENTS.md` or contributing guide, review
-against its stated required checks, and leave blocking threads for the
-reviewer who opened them to resolve. An agent does not approve or merge its
-own pull request.
+Surfacing a PR is not the end. A script that prints a URL does not wake an
+agent, and three agents reviewing to three private standards is not peer
+review. The work item produced above is handed to a **review contract**,
+defined once and shared.
+
+### One contract, thin adapters
+
+The canonical package lives in
+[`thelarklan/dev-tools`](https://github.com/thelarklan/dev-tools) at
+`skills/thelarklan-pr-review/`, written to the open Agent Skills `SKILL.md`
+layout with portable scripts and references. It is **platform-neutral**: it
+assumes no particular scheduler, no host-specific frontmatter field, and no
+one vendor's subagent API.
+
+It is *installed* — generated from the canonical package, never hand-edited
+per host — into both discovery layouts:
+
+- `~/.agents/skills/thelarklan-pr-review` for hosts reading the shared
+  Agent Skills location, including Codex, Gemini CLI and GitHub Copilot;
+- `~/.claude/skills/thelarklan-pr-review` for Claude Code.
+
+Repository-scoped equivalents where a host supports them. CI verifies the
+installed copies hash-equal to the canonical one, so they cannot drift into
+three subtly different quality bars — which is the failure that would be
+hardest to see and most damaging to the whole arrangement.
+
+What stays in the per-host adapter is thin and genuinely host-specific:
+scheduling, invocation, the inference credential and model choice, and any
+host-only metadata. Everything about *how to review* stays in the contract.
+
+The skill is invoked with the PR URL and the expected head SHA, reads the
+target repository's own `AGENTS.md` and contributing guidance, and applies
+them on top of the shared contract.
+
+### Collection
+
+Collection is deterministic and belongs in `dev-tools`, not in the model:
+identity, immutable base and head SHAs, PR metadata, the PR body and any
+linked issue or spec, check results, reviews, and both comment sources.
+Everything paginated to completion at `expected_head_sha`, everything fatal
+on error — the silence invariant applies here exactly as it does to the
+poll.
+
+GitHub authentication should prefer a dedicated GitHub App installation
+token, or failing that a bot token scoped to metadata:read, contents:read
+and pull-requests:write — plus checks or statuses only if that mechanism is
+actually used. Fail closed unless the authenticated login equals
+`reviewer_login`.
+
+Generated and binary files are excluded from model input and **reported as
+excluded**; security-relevant, configuration and migration files are
+prioritised; and when the diff exceeds the budget it is chunked or
+summarised, never silently truncated.
+
+### Judgment
+
+Three independent passes, kept separate so one does not colour another:
+
+1. **Spec and scope** — does the change do what the PR and any linked issue
+   say, and only that?
+2. **Correctness and risk** — regressions, security, error handling, tests.
+3. **Standards and maintainability** — the target repository's stated
+   conventions.
+
+Hosts with isolated workers may run these in parallel. Findings are then
+aggregated by severity, each carrying file and line, what triggered it, its
+impact, the evidence, and a direction for the fix.
+
+### Result schema
+
+One validated schema, agreed before any model is asked for output:
+
+```
+{
+  summary: string,
+  verdict: "approve" | "request_changes" | "comment",
+  findings: [{
+    severity: "blocker" | "warning" | "suggestion" | "nit",
+    path, line, side,
+    title, body,
+    suggestion?,     // optional concrete patch
+    evidence
+  }]
+}
+```
+
+Every location is validated against the exact diff at `expected_head_sha`
+before submission. If validation fails, **no review is posted** — a partial
+review with half its findings dropped is worse than an error, because it
+looks complete.
+
+### Submission
+
+Local review and GitHub mutation are separate steps. Posting a comment,
+approval or change request is explicitly authorized, performed under the
+agent's own identity, and attached to the exact head that was reviewed —
+re-checked immediately beforehand. Findings go out as **one formal review**
+carrying the summary and the inline findings, not a scatter of comments.
+
+`APPROVE` only when no blocker- or warning-severity findings remain. An
+agent does not approve or merge its own pull request, and blocking threads
+are left for the reviewer who opened them to resolve.
+
+### Behavioural fixtures
+
+The contract is only real if it is tested against the ways it fails. At
+minimum: wrong authenticated identity; a head SHA that moved mid-review;
+draft and self-authored PRs; a missing spec or linked issue; pagination
+past 100 for each paginated source; an inline reply on an existing thread;
+an API failure mid-run; and a clean PR with no findings at all — the case
+where a contract most easily invents something to say.
 
 ## Reference implementation
 
 The check belongs in [`thelarklan/dev-tools`](https://github.com/thelarklan/dev-tools)
 rather than here, alongside the other shell helpers, their installer, and
-the test suite it should join. It is not there yet; this document is the
-contract it has to implement when it lands.
+the test suite it should join — next to the `thelarklan-pr-review` skill
+package described above. It is not there yet; this document is the contract
+it has to implement when it lands.
 
-The current draft of the script satisfies the silence invariant, the
-pagination requirements, and the dedupe rules, and diverges from this
-document in two places that should be closed before it is installed:
+The current draft of the script satisfies the silence invariant and the
+local dedupe rules. Review feedback on this document tightened several
+requirements past what that draft does, so the gap list is longer than it
+was. All of it should be closed before the script is installed:
 
 - It does not filter on the PR author, so signal 1 reports each agent's own
   pull requests on every poll, permanently.
 - It applies signal 1 to drafts, so a PR surfaces when it is opened rather
   than when it is marked ready — and then surfaces a second time via
   signal 2.
+- It sets `per_page=100` but does not follow `Link` pages, so it neither
+  paginates to completion nor fails when a further page exists.
+- It reads only conversation comments, missing replies on inline review
+  threads — the highest-value case for signal 3.
+- Signal 3 is unscoped and uncapped: any comment by another account fires
+  it, with no round limit.
+- There is no fail-closed identity preflight, and no durable idempotency
+  beyond the local state file.
 
 One implementation note for whoever ports it: where the script reads a
 command's output through `read ... < <(gh api ...)`, the `|| die` is
