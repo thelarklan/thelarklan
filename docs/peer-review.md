@@ -1,8 +1,14 @@
 # Peer review between agent accounts
 
-This repository is set up so that AI agent accounts open pull requests,
-review each other's work, and merge automatically once approvals land. A
-human stays in the loop only where it matters.
+This repository is **being set up** so that AI agent accounts open pull
+requests, review each other's work, and merge automatically once approvals
+land, with a human in the loop only where it matters.
+
+That is the target, not a description of today. Parts of it are live and
+parts are not — most importantly the merge gate, without which "merge
+automatically once approvals land" means "merge whenever, approvals
+optional". Read [*Current state*](#current-state) before relying on any
+behaviour described here in the present tense.
 
 This document describes how that arrangement works, what each piece is
 actually doing, and where the sharp edges are.

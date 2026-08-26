@@ -112,9 +112,24 @@ own work.
 for review: it is a PR whose author has explicitly said it is not ready,
 and by convention here has checks still to run. Reporting on head SHA alone
 surfaces every PR the instant it is opened, days before anyone wants eyes
-on it — and then signal 2 surfaces it *again* when it actually becomes
-ready. Signal 2 is the correct trigger for a draft; signal 1 should skip
-drafts entirely.
+on it — and then surfaces it *again* when it actually becomes ready.
+
+So signal 1 is gated on `draft == false`. It is not, however, replaced by
+signal 2, and the two cover different cases:
+
+| The PR                                 | Fires | Why                         |
+| -------------------------------------- | ----- | --------------------------- |
+| Draft, never reviewed, now ready       | **1** | no longer draft, no review at this head |
+| Reviewed while draft, then made ready  | **2** | code unchanged, so 1 is quiet |
+
+The second row is the one that needs signal 2 to exist. A PR that was
+reviewed in draft has a review at the current head, so signal 1 is quiet —
+but leaving draft is a real change in what is being asked for, and without
+signal 2 it would pass unnoticed.
+
+The first row is the common case, and it needs no timestamp: signals 2 and
+3 are both defined relative to a last-review timestamp that a never-
+reviewed PR does not have. Signal 1 covers it on its own.
 
 **The agent's own comments.** Signal 3 has to exclude the reviewer across
 both comment sources, or the agent's own follow-up on its own thread
@@ -355,20 +370,48 @@ So the check is not "what does `GET /user` say" but "**does the
 authenticated principal match the expected principal**", and the principal
 has a type:
 
-| Credential                     | Type   | Resolve with          | Posts as      |
-| ------------------------------ | ------ | --------------------- | ------------- |
-| Agent fine-grained user token  | `user` | `GET /user` → `login` | agent account |
-| App **user access token** [^1] | `user` | `GET /user` → `login` | agent account |
-| App **installation** token     | `app`  | `GET /app` → `slug`   | `<slug>[bot]` |
+| Credential                     | Type   | Resolve with           | Posts as      |
+| ------------------------------ | ------ | ---------------------- | ------------- |
+| Agent fine-grained user token  | `user` | `GET /user` → `login`  | agent account |
+| App **user access token** [^1] | `user` | `GET /user` → `login`  | agent account |
+| App **installation** token     | `app`  | bound at mint time [^2] | `<slug>[bot]` |
 
 [^1]: A GitHub App user access token, authorized by the agent account. It
 acts on that account's behalf, which is why it stays a `user` principal.
+
+[^2]: **Not** `GET /app`. That endpoint requires a JWT signed with the
+App's private key and rejects installation access tokens outright, so using
+it as the preflight would reject the credential it was meant to verify —
+every run.
 
 Configuration names the expected principal as a type/identity pair, and the
 preflight resolves the authenticated principal by type and compares. Fail
 closed on any mismatch, and fail closed on an unrecognised credential type
 rather than guessing — an unresolvable principal is exactly the case where
 guessing posts a review under the wrong name.
+
+**An installation token cannot self-identify**, and there is no endpoint
+that makes it. This is a real asymmetry with user tokens, not an oversight
+to route around, so the contract addresses it where the information
+actually exists — the minting step:
+
+- The adapter that mints the token holds the App's private key. It calls
+  `GET /app` **with the JWT**, before minting, and learns the slug and App
+  ID authoritatively.
+- It hands the submitter the token **bound to** that `(slug, app_id,
+  installation_id)`, as explicit input rather than something to be
+  discovered.
+- The submitter fails closed if an `app` principal arrives without that
+  binding. An unbound installation token is an unidentifiable principal,
+  and unidentifiable is exactly the case that must never be allowed to
+  post.
+
+The check is still fail-closed; it has moved to the only place with the
+evidence to perform it. What the submitter cannot do is *independently*
+verify an app principal it was handed — so a compromised or careless
+minting adapter is inside the trust boundary for `app`, and is not for
+`user`. That is a genuine cost of the App route, and part of why this
+repository uses a user principal.
 
 The marker schema carries the same value, so `reviewer=` may hold either an
 agent login or an App bot identity, and idempotency keys on the principal
@@ -417,6 +460,7 @@ One validated schema, agreed before any model is asked for output:
   findings: [{
     severity: "blocker" | "warning" | "suggestion" | "nit",
     path?, line?, side?,   // omitted or null for a PR-level finding
+    start_line?, start_side?,  // multi-line range; requires line/side
     title, body,
     suggestion?,           // optional concrete patch
     evidence
@@ -431,6 +475,12 @@ convention broken across the diff. Requiring `path` and `line` on every
 finding would make those fail diff-location validation, and the practical
 effect is not stricter review but a model that learns to pin PR-level
 concerns to an arbitrary nearby line, or to drop them.
+
+A finding may also span a range. `start_line` and `start_side` map to
+GitHub's multi-line review comments, so a finding about a block is anchored
+to the block rather than to an arbitrary line inside it. They are only
+meaningful alongside `line` and `side`, and validation checks the whole
+range against the diff, not just its end.
 
 So submission splits by location: findings with one are validated against
 the exact diff at `expected_head_sha` and posted inline; findings without
@@ -495,7 +545,10 @@ minimum: each supported credential type, and a mismatched principal of
 each; an installation token where a user principal is expected; a head SHA
 that moved mid-review; draft and self-authored PRs; a missing spec or
 linked issue; pagination past 100 for each paginated source; an inline
-reply on an existing thread; a finding with no `path`/`line`; an approval
+reply on an existing thread; a finding with no `path`/`line`; a multi-line
+finding whose range falls partly outside the diff; an `app` principal
+arriving without its mint-time binding; an installation token passed to
+`GET /app`, which must fail loudly rather than being treated as a mismatch; an approval
 attempted on a draft; an API failure mid-run; and a clean PR with no
 findings at all — the case where a contract most easily invents something
 to say.
@@ -527,6 +580,8 @@ was. All of it should be closed before the script is installed:
   it, with no round limit.
 - There is no principal preflight, and no durable idempotency beyond the
   local state file.
+- Signal 1 does not gate on `draft == false`, so the draft split in *What
+  does not count* is unimplemented in both directions.
 - There is no submitter at all: the draft only reports, so the whole
   `submit-review` path described above is still to be written.
 
