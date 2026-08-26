@@ -336,11 +336,56 @@ Everything paginated to completion at `expected_head_sha`, everything fatal
 on error — the silence invariant applies here exactly as it does to the
 poll.
 
-GitHub authentication should prefer a dedicated GitHub App installation
-token, or failing that a bot token scoped to metadata:read, contents:read
-and pull-requests:write — plus checks or statuses only if that mechanism is
-actually used. Fail closed unless the authenticated login equals
-`reviewer_login`.
+#### Authentication, and the identity invariant
+
+The earlier draft of this document recommended a GitHub App installation
+token *and* required `gh api user` to return `reviewer_login`. Those two
+requirements contradict each other, and the contradiction is worth stating
+plainly because it would have made the recommended deployment impossible to
+run.
+
+An installation token authenticates as **the App installation**, not as a
+user. `GET /user` is a user-token endpoint and does not answer for one;
+reviews created with an installation token are attributed to the App's bot
+identity (`<app-slug>[bot]`), not to `@larkbot-claude`. A fail-closed
+preflight comparing `gh api user --jq .login` against `reviewer_login`
+would reject that credential every time.
+
+So the check is not "what does `GET /user` say" but "**does the
+authenticated principal match the expected principal**", and the principal
+has a type:
+
+| Credential                     | Type   | Resolve with          | Posts as      |
+| ------------------------------ | ------ | --------------------- | ------------- |
+| Agent fine-grained user token  | `user` | `GET /user` → `login` | agent account |
+| App **user access token** [^1] | `user` | `GET /user` → `login` | agent account |
+| App **installation** token     | `app`  | `GET /app` → `slug`   | `<slug>[bot]` |
+
+[^1]: A GitHub App user access token, authorized by the agent account. It
+acts on that account's behalf, which is why it stays a `user` principal.
+
+Configuration names the expected principal as a type/identity pair, and the
+preflight resolves the authenticated principal by type and compares. Fail
+closed on any mismatch, and fail closed on an unrecognised credential type
+rather than guessing — an unresolvable principal is exactly the case where
+guessing posts a review under the wrong name.
+
+The marker schema carries the same value, so `reviewer=` may hold either an
+agent login or an App bot identity, and idempotency keys on the principal
+rather than assuming a user login.
+
+**For this repository the principal is a user**, because CODEOWNERS routes
+to accounts and the three agents are accounts. An App is the better shape
+for a fleet that outgrows that, which is why it stays supported rather than
+being dropped — but adopting it means accepting that reviews come from a
+bot identity, and re-checking the CODEOWNERS arrangement, which cannot name
+one.
+
+Scope, whichever type: metadata read, contents read, and pull requests
+write — plus checks or statuses only if that mechanism is actually used.
+
+Each supported credential type gets its own fixture, so an unsupported or
+mismatched one fails closed instead of silently posting as somebody else.
 
 Generated and binary files are excluded from model input and **reported as
 excluded**; security-relevant, configuration and migration files are
@@ -403,6 +448,33 @@ agent's own identity, and attached to the exact head that was reviewed —
 re-checked immediately beforehand. Findings go out as **one formal review**
 carrying the summary and the inline findings, not a scatter of comments.
 
+**One shared submitter, not one per host.** This is the highest-impact step
+in the whole pipeline — it is the only one that writes — so it is the last
+place three independent reimplementations should appear. `dev-tools`
+provides a single command:
+
+```
+submit-review --result <validated-json> \
+  --repo <repo> --pr <n> --expected-head-sha <sha> \
+  --principal <type:identity> --contract-version <v> \
+  [--trigger-event-id <id>]
+```
+
+It performs, in order: principal preflight, idempotency-marker query,
+head-SHA revalidation, draft check, diff-location validation of every
+located finding — and **aborts before any mutation** if any of them fails.
+Then it maps the verdict to `APPROVE`, `REQUEST_CHANGES` or `COMMENT`
+(downgrading on a draft), embeds the marker, and submits **one atomic
+review**.
+
+The portable implementation is `gh api` against REST. The REST API is the
+provider-neutral contract; `gh` is only transport, and a host that would
+rather use its own HTTP client is conforming as long as it makes the same
+calls in the same order. What is not optional is the sequence of checks and
+the single-review submission — a host that reimplements those will drift,
+and it will drift in the step where drift is written to other people's pull
+requests.
+
 `APPROVE` only when no blocker- or warning-severity findings remain. An
 agent does not approve or merge its own pull request, and blocking threads
 are left for the reviewer who opened them to resolve.
@@ -419,12 +491,14 @@ author may have marked it ready in between.
 ### Behavioural fixtures
 
 The contract is only real if it is tested against the ways it fails. At
-minimum: wrong authenticated identity; a head SHA that moved mid-review;
-draft and self-authored PRs; a missing spec or linked issue; pagination
-past 100 for each paginated source; an inline reply on an existing thread;
-a finding with no `path`/`line`; an approval attempted on a draft;
-an API failure mid-run; and a clean PR with no findings at all — the case
-where a contract most easily invents something to say.
+minimum: each supported credential type, and a mismatched principal of
+each; an installation token where a user principal is expected; a head SHA
+that moved mid-review; draft and self-authored PRs; a missing spec or
+linked issue; pagination past 100 for each paginated source; an inline
+reply on an existing thread; a finding with no `path`/`line`; an approval
+attempted on a draft; an API failure mid-run; and a clean PR with no
+findings at all — the case where a contract most easily invents something
+to say.
 
 ## Reference implementation
 
@@ -451,8 +525,10 @@ was. All of it should be closed before the script is installed:
   call, so it cannot see which threads are unresolved.
 - Signal 3 is unscoped and uncapped: any comment by another account fires
   it, with no round limit.
-- There is no fail-closed identity preflight, and no durable idempotency
-  beyond the local state file.
+- There is no principal preflight, and no durable idempotency beyond the
+  local state file.
+- There is no submitter at all: the draft only reports, so the whole
+  `submit-review` path described above is still to be written.
 
 One implementation note for whoever ports it: where the script reads a
 command's output through `read ... < <(gh api ...)`, the `|| die` is
