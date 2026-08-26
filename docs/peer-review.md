@@ -120,9 +120,27 @@ collect two approvals, merge with no human involved.
 Everything above describes the intended arrangement. As of 2026-08-26 it is
 not all in place, and the gaps are the silent kind:
 
-- **The ruleset does not exist.** `main` is unprotected and the repository
-  has no rulesets. Nothing currently requires a pull request, an approval,
-  or a code-owner review to land on the default branch.
+- **The ruleset now exists and is enforcing.** `main protection` was
+  created on 2026-08-26 and `main` reports `protected: true`. All three
+  rules are active: pull request required with 2 approvals, dismiss stale
+  reviews on push, code-owner review, approval of the most recent push;
+  restrict deletions; block force pushes.
+- **Its admin bypass is missing.** The ruleset was created with a
+  `RepositoryRole` bypass actor for repository admin. GitHub accepted the
+  request, created the ruleset, and **discarded that entry without an
+  error** — `bypass_actors` reads `null`. This is the same silent-discard
+  behaviour as a CODEOWNERS entry for an account without write access, in a
+  different part of the API, and it has a consequence: the escape hatch
+  described under *Known sharp edges* for a human-authored guardrail PR is
+  not installed. Until it is added, such a PR cannot be merged at all
+  rather than merging by deliberate bypass. Adding it via the UI is the
+  reliable route, since the UI only offers actors the repository actually
+  supports.
+- **GitHub added `require_extra_approval_for_unattributed_changes`.** Not
+  requested; it is a current default. It demands an extra approval when a
+  PR carries commits not attributed to a known account, which is worth
+  watching in a repository where every contributor is a bot pushing from a
+  fork.
 - **Agent write access is now in place.** Read from the collaborators API
   on 2026-08-26: `@larkbot-codex`, `@larkbot-gemini` and `@larkbot-claude`
   all hold **Write**, and `@thelarklan` holds Admin. This changed during
@@ -137,8 +155,9 @@ not all in place, and the gaps are the silent kind:
   `@thelarkbot` and `@thelarkdoodle` both 404. Every review request routed
   through them went nowhere, with no error anywhere to notice.
 
-Until the ruleset is created, treat review as manual. The pull-based check
-described in [`review-checking.md`](review-checking.md) is what makes that survivable:
+The merge gate is therefore live but incomplete, and review routing still
+depends on this pull request merging. Until then, treat review as manual.
+The pull-based check described in [`review-checking.md`](review-checking.md) is what makes that survivable:
 it looks at reviews and commits directly, so it keeps working while review
 requests are still being discarded.
 
@@ -168,9 +187,10 @@ they should stay rare enough to be worth reading.
 **Write access without the ruleset is worse than no setup.** Collaborators
 should be added only once the ruleset is active. In the window between the
 two, an agent can push straight to the default branch and skip review
-entirely. This repository is squarely in that window now — three agents
-hold write access and `main` is unprotected — and creating the ruleset is
-the single highest-value thing left to do. See *Current state*.
+entirely. This repository was in that window for part of 2026-08-26 —
+three agents on Write against an unprotected `main` — and closed it by
+creating the ruleset rather than by removing access. Worth recording as the
+order to follow next time: ruleset first, collaborators second.
 
 **A silently ignored owner and a quiet week look identical.** Whether the
 cause is a missing account, missing write access, or no CODEOWNERS on the
