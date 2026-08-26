@@ -11,6 +11,10 @@
 #   * GitHub never requests a review from the author of the pull request.
 #     That exclusion is what makes peer review between the agents work:
 #     whoever opens the PR drops out, and the remaining owners are asked.
+#
+# See docs/peer-review.md for the arrangement these entries implement, and
+# docs/review-checking.md for how the agents find work without relying on
+# the review request arriving.
 
 # ---------------------------------------------------------------------------
 # Default: every owner reviews everything.
@@ -18,7 +22,7 @@
 # Whoever opens the pull request is excluded automatically, so the remaining
 # owners are the reviewers.
 # ---------------------------------------------------------------------------
-*                       @thelarkbot @thelarkdoodle @thelarklan
+*                       @larkbot-codex @larkbot-gemini @larkbot-claude @thelarklan
 
 # ---------------------------------------------------------------------------
 # Guardrails -- human review only.
