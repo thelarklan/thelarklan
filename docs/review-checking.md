@@ -200,14 +200,18 @@ without it. In that case signal 1 already covers the PR.
 
 ## Per-agent configuration
 
-Each agent runs the same check under its own identity — `larkbot-codex`,
-`larkbot-gemini`, or `larkbot-claude` — as the reviewer login that signals
-1 through 3 are all evaluated against.
+Each agent runs the same check under its own **principal** —
+`user:larkbot-codex`, `user:larkbot-gemini` or `user:larkbot-claude` — and
+that principal is what signals 1 through 3 are evaluated against. All three
+are user principals here; see *Authentication* for the typed form and for
+why an App would be a different principal type rather than another login.
 
 **Identity is a fail-closed preflight, not a deployment assumption.**
 Before any polling and again before any submission, resolve the
-authenticated login (`gh api user --jq .login`) and require it to equal the
-configured `reviewer_login`. Abort otherwise. A runner that has quietly
+authenticated principal by its type and require it to equal the configured
+one. For a user principal that is `gh api user --jq .login`; the other
+types resolve differently, which is the point of typing it. Abort on any
+mismatch. A runner that has quietly
 picked up the human's or an admin's credentials would evaluate signals
 against the wrong review history — reporting nothing, since that identity
 has no reviews to be stale against — and worse, could post a review or an
@@ -234,9 +238,19 @@ exists. Correctness has to survive a stateless runner.
 Make the unit of work an explicit key:
 
 ```
-(repository, pr_number, expected_head_sha, reviewer_login,
+(repository, pr_number, expected_head_sha, principal,
  review_contract_version, trigger_event_id?)
 ```
+
+`principal` is the typed identity from *Authentication* below —
+`{ type, identity, binding? }`, serialized unambiguously as
+`<type>:<identity>` — not a bare login. A bare login has no valid value for
+an App-backed run, and worse, `larkbot-claude` as a user principal and
+`larkbot-claude` as some App slug would collide on identical text while
+being different reviewers. The same value is used in the work item, the
+single-flight key, the durable marker, the cache namespace and the
+submitter's `--principal` argument, so there is exactly one notion of "who
+is reviewing" throughout.
 
 `review_contract_version` is in the key on purpose: a genuine change to the
 review contract should re-review PRs that were assessed under the old one,
@@ -250,7 +264,7 @@ Around that key:
   the local cache is only caching:
 
   ```
-  <!-- agent-review: reviewer=larkbot-claude head=<sha> contract=<version> trigger=<id> -->
+  <!-- agent-review: principal=user:larkbot-claude head=<sha> contract=<version> trigger=<id> -->
   ```
 
   `trigger` carries the immutable ID of the triggering event for signals 2
@@ -285,7 +299,7 @@ poll boundary.
 Both paths must emit the **same normalized work item**:
 
 ```
-{ repo, pr, expected_head_sha, reviewer_login, trigger, trigger_event_id }
+{ repo, pr, expected_head_sha, principal, trigger, trigger_event_id }
 ```
 
 and both must pass through the same idempotency layer above. If each
@@ -413,9 +427,11 @@ minting adapter is inside the trust boundary for `app`, and is not for
 `user`. That is a genuine cost of the App route, and part of why this
 repository uses a user principal.
 
-The marker schema carries the same value, so `reviewer=` may hold either an
-agent login or an App bot identity, and idempotency keys on the principal
-rather than assuming a user login.
+The marker schema carries the same value, so `principal=` holds
+`user:larkbot-claude` or `app:<slug>`, and idempotency keys on that rather
+than on a bare login — which would have no valid value for an App-backed
+run, and would let a user login and an App slug of identical text collide
+while being different reviewers.
 
 **For this repository the principal is a user**, because CODEOWNERS routes
 to accounts and the three agents are accounts. An App is the better shape

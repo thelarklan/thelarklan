@@ -137,10 +137,15 @@ not all in place, and the gaps are the silent kind:
   reliable route, since the UI only offers actors the repository actually
   supports.
 - **GitHub added `require_extra_approval_for_unattributed_changes`.** Not
-  requested; it is a current default. It demands an extra approval when a
-  PR carries commits not attributed to a known account, which is worth
-  watching in a repository where every contributor is a bot pushing from a
-  fork.
+  requested; it is a current default. Despite the general-sounding name it
+  is a **Copilot-specific** rule — GitHub presents it as *"require an
+  additional approval for unattributed Copilot pull requests"*, and it
+  applies when Copilot opens a PR under its App identity with no
+  attribution to a person. It does **not** fire merely because a PR was
+  authored by a bot account: `@larkbot-codex`, `@larkbot-gemini` and
+  `@larkbot-claude` are ordinary user accounts and do not trigger it. Left
+  enabled, since it costs this repository nothing and guards a real case if
+  Copilot is ever used here.
 - **Agent write access is now in place.** Read from the collaborators API
   on 2026-08-26: `@larkbot-codex`, `@larkbot-gemini` and `@larkbot-claude`
   all hold **Write**, and `@thelarklan` holds Admin. This changed during
@@ -149,8 +154,9 @@ not all in place, and the gaps are the silent kind:
 - **Auto-merge is disabled at the repository level.**
   `allow_auto_merge` is `false`. Enabling it is one step; opting an
   individual PR into auto-merge is a second, separate one. Neither is done,
-  so nothing merges unattended today — which is the safe side of the gap
-  while the ruleset is still missing.
+  so nothing merges unattended today. That is a separate outstanding target
+  from the ruleset, which now exists — the unattended path described under
+  *The merge gate* is the part still not built.
 - **The previous CODEOWNERS named accounts that do not exist.**
   `@thelarkbot` and `@thelarkdoodle` both 404. Every review request routed
   through them went nowhere, with no error anywhere to notice.
