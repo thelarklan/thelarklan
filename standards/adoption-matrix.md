@@ -6,8 +6,8 @@ during each adoption pull request and periodically afterward.
 
 | Repository | Standard | Approval profile | Enforcement | Exceptions | State |
 | --- | --- | --- | --- | --- | --- |
-| `thelarklan/thelarklan` | `review-standard-v1` | `peer-agents` | User-owned; two approvals, trusted check, and latest-push approval; code-owner review disabled; maintainer merge | Temporary human-approval enforcement gap recorded in local policy | Adopting via PR #4 |
-| `thelarklan/dev-tools` | `review-standard-v1` | `peer-agents` | User-owned; two approvals and trusted check; code-owner review and Jenkins ruleset checks still required; maintainer merge | Squash merge and `pr-cleanup` | Pilot via PR #23 |
+| `thelarklan/thelarklan` | `review-standard-v2` | `peer-agents` | Personal; two approvals and trusted check; code-owner review and v2 App reconciliation pending | Protected-approval deployment gap and personal reviewer-identity limitation recorded locally | Adopting via PR #5 (v2 source upgrade) |
+| `thelarklan/dev-tools` | `review-standard-v2` | `peer-agents` | Personal; two approvals and trusted check; code-owner review, Jenkins context, and v2 App reconciliation pending | Protected-approval and Jenkins deployment gaps; personal reviewer-identity limitation; `pr-cleanup` extension | Pilot via PR #23 |
 | `thelarklan/wsl-tools` | Not adopted | Not declared | User-owned; two approvals, trusted check, and three CI contexts; code-owner review disabled | None recorded | Wave 2 planned |
 | `thelarklan/podman-tools` | Not adopted | Not declared | User-owned; two approvals and trusted check; code-owner review disabled; no repository CI required | None recorded | Wave 2 planned |
 | `thelarklan/jenkins-controller` | Not adopted | Not declared | User-owned; two approvals and trusted check; code-owner review disabled; no repository CI required | Infrastructure risk requires a repository-specific audit | Wave 3 planned |
@@ -19,10 +19,11 @@ ownership, and merge protections have been checked at the merged head.
 
 ## Incremental rollout
 
-1. Merge and tag the canonical standard, then complete the `dev-tools` pilot.
+1. Merge and tag the canonical v2 standard, deploy the hardened App permission
+   update, then complete the `dev-tools` pilot.
 2. Adopt in `wsl-tools` and `podman-tools`, reusing the tooling-oriented policy
    while keeping PowerShell, container, and platform verification local.
-3. Audit and adopt in `jenkins-controller` after defining human-only deployment,
+3. Audit and adopt in `jenkins-controller` after defining protected deployment,
    credential, and controller-configuration paths plus reliable CI contexts.
 4. Classify the `lol` repository's purpose and verification surface before
    selecting an approval profile or copying managed files.

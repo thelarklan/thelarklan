@@ -76,19 +76,26 @@ the same silent path as one lacking access.
 
 ## The guardrail paths
 
-Two paths override the global rule (last match wins) and are owned by the
-human alone:
+Seven path rules override the global rule (last match wins) and are owned by
+the human alone. The base branch's `.github/CODEOWNERS` is the authoritative
+local list:
 
 ```
 /.github/workflows/     @thelarklan
 /.github/CODEOWNERS     @thelarklan
+/standards/             @thelarklan
+/templates/             @thelarklan
+/scripts/               @thelarklan
+/test/                  @thelarklan
+/docs/review-policy.md  @thelarklan
 ```
 
-These are the paths that control the merge gate itself. CI defines what
-"passing" means; CODEOWNERS defines who gets to approve. An agent that
-could change either could widen its own permissions in a single PR — and
-with auto-merge enabled, do it without anyone watching. Keeping them
-human-owned means that particular move always stops for a person.
+These paths define the standard, its distribution and tests, CI, ownership,
+and the repository's adoption and exception policy. An agent that could change
+them without owner approval could weaken the review contract or its enforcement
+in a single pull request. Keeping them human-owned makes that move stop for a
+person. The trusted App's private protected-path map must match these base-branch
+rules; disagreement is a fail-closed audit finding.
 
 ## The merge gate
 
@@ -101,82 +108,41 @@ A branch ruleset named `main protection` should target the default branch:
   - Require approval of the most recent reviewable push
 - Restrict deletions
 - Block force pushes
-- Bypass: Repository admin
+- Require the head-pinned `bot-review-quorum` check from the trusted App
+- Bypass: none
 
-Status checks are **not** required, because no CI exists yet. When CI is
-added, that rule should be turned on — and note that adding it means
-touching `/.github/workflows/`, a guardrail path.
+Add every repository CI context when it exists. The trusted check is separate:
+native review slots in a personal repository accept any write collaborator,
+while the App verifies that the rotating two configured agents supplied the
+exact-head approvals.
 
 "Dismiss stale approvals" and "require approval of the most recent
 reviewable push" exist together for a reason: without them, an agent could
 collect approvals on a harmless diff and then push something else before
 the merge fires.
 
-Combined with auto-merge, the normal path for an agent PR is: open it,
-collect two approvals, merge with no human involved.
+Combined with auto-merge, the normal path for an agent PR is: open it, collect
+both other agent approvals, let the App arm auto-merge, and let GitHub merge
+with no human involved. A guardrail PR adds human content approval and then
+follows the same GitHub merge path.
 
 ## Current state
 
-Everything above describes the intended arrangement. As of 2026-08-26 it is
-not all in place, and the gaps are the silent kind:
-
-- **The ruleset now exists and is enforcing.** `main protection` was
-  created on 2026-08-26 and `main` reports `protected: true`. All three
-  rules are active: pull request required with 2 approvals, dismiss stale
-  reviews on push, code-owner review, approval of the most recent push;
-  restrict deletions; block force pushes.
-- **Its admin bypass is missing.** The ruleset was created with a
-  `RepositoryRole` bypass actor for repository admin. GitHub accepted the
-  request, created the ruleset, and **discarded that entry without an
-  error** — `bypass_actors` reads `null`. This is the same silent-discard
-  behaviour as a CODEOWNERS entry for an account without write access, in a
-  different part of the API, and it has a consequence: the escape hatch
-  described under *Known sharp edges* for a human-authored guardrail PR is
-  not installed. Until it is added, such a PR cannot be merged at all
-  rather than merging by deliberate bypass. Adding it via the UI is the
-  reliable route, since the UI only offers actors the repository actually
-  supports.
-- **GitHub added `require_extra_approval_for_unattributed_changes`.** Not
-  requested; it is a current default. Despite the general-sounding name it
-  is a **Copilot-specific** rule — GitHub presents it as *"require an
-  additional approval for unattributed Copilot pull requests"*, and it
-  applies when Copilot opens a PR under its App identity with no
-  attribution to a person. It does **not** fire merely because a PR was
-  authored by a bot account: `@larkbot-codex`, `@larkbot-gemini` and
-  `@larkbot-claude` are ordinary user accounts and do not trigger it. Left
-  enabled, since it costs this repository nothing and guards a real case if
-  Copilot is ever used here.
-- **Agent write access is now in place.** Read from the collaborators API
-  on 2026-08-26: `@larkbot-codex`, `@larkbot-gemini` and `@larkbot-claude`
-  all hold **Write**, and `@thelarklan` holds Admin. This changed during
-  the life of this pull request — all three held Read earlier the same day
-  — so re-read it rather than trusting this line indefinitely.
-- **Auto-merge is disabled at the repository level.**
-  `allow_auto_merge` is `false`. Enabling it is one step; opting an
-  individual PR into auto-merge is a second, separate one. Neither is done,
-  so nothing merges unattended today. That is a separate outstanding target
-  from the ruleset, which now exists — the unattended path described under
-  *The merge gate* is the part still not built.
-- **The previous CODEOWNERS named accounts that do not exist.**
-  `@thelarkbot` and `@thelarkdoodle` both 404. Every review request routed
-  through them went nowhere, with no error anywhere to notice.
-
-The merge gate is therefore live but incomplete, and review routing still
-depends on this pull request merging. Until then, treat review as manual.
-The pull-based check described in [`review-checking.md`](review-checking.md) is what makes that survivable:
-it looks at reviews and commits directly, so it keeps working while review
-requests are still being discarded.
+The 2026-08-28 audit found the two-approval, stale-review, latest-push,
+conversation, current-base, squash-only, and trusted-check rules active with no
+bypass. Code-owner review remains disabled. Repository auto-merge is enabled,
+but v2 App reconciliation and its pull-request write permission are not yet
+deployed. Leave individual PR auto-merge unarmed until those gaps are closed
+and both a routine and protected acceptance PR pass.
 
 ## Known sharp edges
 
 **A guardrail PR opened by the human has no eligible approver.** On
-`/.github/workflows/` or `/.github/CODEOWNERS`, `@thelarklan` is the only
-code owner — and is excluded as the author. "Require review from Code
-Owners" cannot be satisfied by any normal route. Such a PR merges only via
-admin bypass. This is a consequence of author-exclusion meeting a
-single-owner path, not a misconfiguration, but it does mean every change to
-CI or ownership is a deliberate bypass. A guardrail PR opened by an *agent*
-is fine: the human is not the author, so the human can approve it.
+any guardrail path listed in the base branch's `.github/CODEOWNERS`,
+`@thelarklan` is the only code owner — and is excluded as the author. "Require
+review from Code Owners" cannot be satisfied by any allowed route. This is a
+consequence of author-exclusion meeting a single-owner path, not a reason to
+bypass it. A guardrail PR must be agent-authored so the human can approve it.
 
 **Quorum depends on who opened the PR.** With four owners, an agent-opened
 PR leaves three eligible approvers for two required approvals, which has
@@ -185,10 +151,10 @@ them awake. That is the tighter case, and the one to watch: if bypassing
 starts happening routinely on human-opened PRs, the required count is too
 high for a repository this size and 1 is the honest number.
 
-**Admin bypass is always available.** The human can merge anything. The
-ruleset is a guardrail against unattended agent behaviour, not a lock
-against the owner. Bypasses are recorded, which is most of their value —
-they should stay rare enough to be worth reading.
+**A personal repository cannot bind approval slots to agent identities.** The
+trusted App supplies that missing identity gate. Its one-minute poll is not an
+atomic revocation mechanism, so the owner does not approve routine bot PRs and
+outside accounts do not receive write access without protected review.
 
 **Write access without the ruleset is worse than no setup.** Collaborators
 should be added only once the ruleset is active. In the window between the

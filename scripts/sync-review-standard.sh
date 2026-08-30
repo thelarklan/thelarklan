@@ -26,8 +26,8 @@ human_owner=
 [[ -f $target_policy ]] || { printf 'Consumer policy is missing: %s\n' "$target_policy" >&2; exit 1; }
 [[ -f $target_owners ]] || { printf 'Consumer CODEOWNERS is missing: %s\n' "$target_owners" >&2; exit 1; }
 
-grep -Eq '^Standard: review-standard-v1[[:space:]]*$' "$target_policy" || {
-    printf 'Consumer policy does not adopt review-standard-v1: %s\n' "$target_policy" >&2
+grep -Eq '^Standard: review-standard-v2[[:space:]]*$' "$target_policy" || {
+    printf 'Consumer policy does not adopt review-standard-v2: %s\n' "$target_policy" >&2
     exit 1
 }
 grep -Eq '^Approval profile: (peer-agents|human)[[:space:]]*$' "$target_policy" || {
@@ -66,4 +66,4 @@ fi
 
 mkdir -p -- "${target_template%/*}"
 cp -- "$source_template" "$target_template"
-printf 'Synchronized review-standard-v1 template: %s\n' "$target_template"
+printf 'Synchronized review-standard-v2 template: %s\n' "$target_template"

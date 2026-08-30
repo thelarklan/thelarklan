@@ -37,7 +37,7 @@ sed -i '/^Standard: /d' "$consumer/docs/review-policy.md"
 if bash "$project_dir/scripts/sync-review-standard.sh" --check "$consumer" 2>"$test_dir/standard-error"; then
     fail "check mode accepted a missing standard declaration"
 fi
-grep -Fq 'does not adopt review-standard-v1' "$test_dir/standard-error"
+grep -Fq 'does not adopt review-standard-v2' "$test_dir/standard-error"
 cp -- "$project_dir/docs/review-policy.md" "$consumer/docs/review-policy.md"
 
 sed -i 's/^Human owner: @thelarklan$/Human owner: @thelarklan  /' "$consumer/docs/review-policy.md"
